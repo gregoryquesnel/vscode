@@ -26,6 +26,7 @@ import { IOpenerService } from 'vs/platform/opener/common/opener';
 import { equalsIgnoreCase } from 'vs/base/common/strings';
 import { Schemas } from 'vs/base/common/network';
 import Severity from 'vs/base/common/severity';
+import { configureTrustedDomainSettingsCommand } from 'vs/workbench/contrib/url/common/trustedDomains';
 
 export class OpenUrlAction extends Action {
 	static readonly ID = 'workbench.action.url.openUrl';
@@ -65,7 +66,7 @@ const configureTrustedDomainsHandler = async (
 		if (trustedDomainsSrc) {
 			linkProtectionTrustedDomains = JSON.parse(trustedDomainsSrc);
 		}
-	} catch (err) { }
+	} catch (err) {}
 
 	const domainQuickPickItems: IQuickPickItem[] = linkProtectionTrustedDomains
 		.filter(d => d !== '*')
@@ -119,6 +120,57 @@ const configureTrustedDomainsHandler = async (
 	return [];
 };
 
+const configureOpenerTrustedDomainsHandler = async (
+	quickInputService: IQuickInputService,
+	storageService: IStorageService,
+	productService: IProductService,
+	domainToConfigure: string
+) => {
+	const trustedDomains = productService.linkProtectionTrustedDomains
+		? [...productService.linkProtectionTrustedDomains]
+		: [];
+
+	const openAllLinksItem: IQuickPickItem = {
+		type: 'item',
+		label: localize('openAllLinksWithoutPrompt', 'Open all links without prompt'),
+		id: '*',
+		picked: trustedDomains.indexOf('*') !== -1
+	};
+	const trustDomainItem: IQuickPickItem = {
+		type: 'item',
+		label: domainToConfigure,
+		id: domainToConfigure,
+		picked: true,
+		description: localize('trustDomainAndOpenLink', 'Trust domain {0} and open link', domainToConfigure)
+	};
+
+	const pickedResult = await quickInputService.pick([openAllLinksItem, trustDomainItem], {
+		activeItem: trustDomainItem
+	});
+
+	if (pickedResult) {
+		if (pickedResult.id && trustedDomains.indexOf(pickedResult.id) !== -1) {
+			storageService.store(
+				'http.linkProtectionTrustedDomains',
+				JSON.stringify([...trustedDomains, pickedResult.id]),
+				StorageScope.GLOBAL
+			);
+
+			return [...trustedDomains, pickedResult.id];
+		}
+	}
+
+	return [];
+};
+
+/**
+ * 4 actions:
+ * - Open all links with/without promt
+ * - Add trusted domain / 2nd action
+ * - Configure trusted domains / 2nd action
+ * - Reset trusted domains setting
+ */
+
 const configureTrustedDomainCommand = {
 	id: 'workbench.action.configureLinkProtectionTrustedDomains',
 	description: {
@@ -139,10 +191,17 @@ const configureTrustedDomainCommand = {
 };
 
 CommandsRegistry.registerCommand(configureTrustedDomainCommand);
+CommandsRegistry.registerCommand(configureTrustedDomainSettingsCommand);
 MenuRegistry.appendMenuItem(MenuId.CommandPalette, {
 	command: {
 		id: configureTrustedDomainCommand.id,
 		title: configureTrustedDomainCommand.description.description
+	}
+});
+MenuRegistry.appendMenuItem(MenuId.CommandPalette, {
+	command: {
+		id: configureTrustedDomainSettingsCommand.id,
+		title: configureTrustedDomainSettingsCommand.description.description
 	}
 });
 
@@ -173,7 +232,7 @@ class OpenerValidatorContributions implements IWorkbenchContribution {
 			if (trustedDomainsSrc) {
 				trustedDomains = JSON.parse(trustedDomainsSrc);
 			}
-		} catch (err) { }
+		} catch (err) {}
 
 		const domainToOpen = `${scheme}://${authority}`;
 
@@ -204,10 +263,10 @@ class OpenerValidatorContributions implements IWorkbenchContribution {
 			}
 			// Configure Trusted Domains
 			else if (choice === 2) {
-				const pickedDomains = await configureTrustedDomainsHandler(
+				const pickedDomains = await configureOpenerTrustedDomainsHandler(
 					this._quickInputService,
 					this._storageService,
-					trustedDomains,
+					this._productService,
 					domainToOpen
 				);
 				if (pickedDomains.indexOf(domainToOpen) !== -1) {
